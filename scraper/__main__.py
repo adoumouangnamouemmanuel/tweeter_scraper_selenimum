@@ -108,6 +108,12 @@ def main():
             help="Scrape top tweets",
         )
 
+        parser.add_argument(
+            "--comments",
+            action="store_true",
+            help="Scrape comments for each tweet."
+            )
+
         args = parser.parse_args()
 
         USER_MAIL = args.mail
@@ -158,8 +164,40 @@ def main():
                 scrape_top=args.top,
                 scrape_poster_details="pd" in additional_data,
             )
-            scraper.save_to_csv()
-            if not scraper.interrupted:
+
+            # print(scraper.tweet_cards)
+            
+        scraper.save_to_csv()
+        ids = {}
+        for data in scraper.data:
+            id = int(data[14])
+            print(id, '\n\n')
+            handle = data[1][1:]
+            print(handle, '\n\n')
+            ids[handle] = id
+                # print(data)
+        print(ids)
+        if args.comments:
+            for handle, id in ids.items():
+                scraper.go_to_comments(id, handle)
+                print("\n\nCardddddddddddddddddddddddddd\n\n")
+                
+                # print(scraper.get_comment_cards())
+                # print(scraper.tweet_cards)
+                scraper.scrape_comments(
+                    max_comments=5,
+                    tweet_id=id,
+                    username=handle
+                )
+                # print("\n\nCardddddddddddddddddddddddddd\n\n")
+            print(scraper.comment_data)
+            scraper.save_comment_to_csv()
+            print("\n\nWorkedddddddddddddddddddddddddd\n\n")
+
+            # print(scraper.comment_cards)
+            # print(scraper.comment_data)
+        
+        if not scraper.interrupted:
                 scraper.driver.close()
         else:
             print(

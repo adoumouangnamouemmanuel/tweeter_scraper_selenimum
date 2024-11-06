@@ -4,6 +4,10 @@ import pandas as pd
 from progress import Progress
 from scroller import Scroller
 from tweet import Tweet
+from comment import Comment
+
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
 
 from datetime import datetime
 from fake_headers import Headers
@@ -38,12 +42,14 @@ class Twitter_Scraper:
         username,
         password,
         max_tweets=50,
+        max_comments=50,
         scrape_username=None,
         scrape_hashtag=None,
         scrape_query=None,
         scrape_poster_details=False,
         scrape_latest=True,
         scrape_top=False,
+        tweet_id=None,
         proxy=None,
     ):
         print("Initializing Twitter Scraper...")
@@ -52,8 +58,12 @@ class Twitter_Scraper:
         self.password = password
         self.interrupted = False
         self.tweet_ids = set()
+        self.comment_ids = set()
         self.data = []
+        self.comment_data = []
+        self.comments = {}
         self.tweet_cards = []
+        self.comment_cards = []
         self.scraper_details = {
             "type": None,
             "username": None,
@@ -63,6 +73,7 @@ class Twitter_Scraper:
             "poster_details": False,
         }
         self.max_tweets = max_tweets
+        self.max_comments = max_comments
         self.progress = Progress(0, max_tweets)
         self.router = self.go_to_home
         self.driver = self._get_driver(proxy)
@@ -76,6 +87,11 @@ class Twitter_Scraper:
             scrape_latest,
             scrape_top,
             scrape_poster_details,
+        )
+        self._config_scraper_comment(
+            max_comments,
+            tweet_id,
+            scrape_username,
         )
 
     def _config_scraper(
@@ -119,6 +135,26 @@ class Twitter_Scraper:
             self.scraper_details["type"] = "Home"
             self.router = self.go_to_home
         pass
+
+    def _config_scraper_comment(
+        self,
+        max_comments=50,
+        tweet_id=None,
+        scrape_username=None,
+    ):
+        self.comment_ids = set()
+        # print("Username in config: ", scrape_username)
+        # print("Tweet ID in config: ", tweet_id)
+        # print("Max Comments in config: ", max_comments)
+        self.comment_data = []
+        self.comment_cards = []
+        self.max_comments = max_comments
+        self.progress = Progress(0, max_comments)
+        # Set self.router to a lambda to include parameters tweet_id and username
+        self.router = lambda: self.go_to_comments(tweet_id, scrape_username)
+        self.scroller = Scroller(self.driver)
+        pass
+
 
     def _get_driver(
         self,
@@ -311,6 +347,11 @@ It may be due to the following:
         sleep(3)
         pass
 
+    def go_to_comments(self, tweet_id, username):
+        self.driver.get(f"https://x.com/{username}/status/{tweet_id}")
+        sleep(3)
+        pass
+
     def go_to_profile(self):
         if (
             self.scraper_details["username"] is None
@@ -354,6 +395,12 @@ It may be due to the following:
 
     def get_tweet_cards(self):
         self.tweet_cards = self.driver.find_elements(
+            "xpath", '//article[@data-testid="tweet" and not(@disabled)]'
+        )
+        pass
+
+    def get_comment_cards(self):
+        self.comment_cards = self.driver.find_elements(
             "xpath", '//article[@data-testid="tweet" and not(@disabled)]'
         )
         pass
@@ -439,6 +486,7 @@ It may be due to the following:
                 added_tweets = 0
 
                 for card in self.tweet_cards[-15:]:
+                    # print(card)
                     try:
                         tweet_id = str(card)
 
@@ -535,6 +583,152 @@ It may be due to the following:
 
         pass
 
+
+    def scrape_comments(
+        self,
+        max_comments=50,
+        no_comments_limit=False,
+        tweet_id=None,
+        username=None,
+        router=None,
+    ):
+        # print("-----------------yes------------------")
+        self._config_scraper_comment(
+            max_comments = max_comments,
+            tweet_id = tweet_id,
+            scrape_username = username,
+        )
+
+        # print('-----------------no------------------')
+
+        if router is None:
+            print("-----------------yes------------------")
+            router = self.router
+
+        print('router =========================')
+        router()
+
+        print('-----------------no------------------')
+
+        print("Scraping comments for tweet ID: {}...".format(tweet_id))
+
+        # Accept cookies to make the banner disappear
+        try:
+            accept_cookies_btn = self.driver.find_element(
+            "xpath", "//span[text()='Refuse non-essential cookies']/../../..")
+            accept_cookies_btn.click()
+        except NoSuchElementException:
+            pass
+
+        self.progress.print_progress(0, False, 0, no_comments_limit)
+
+        refresh_count = 0
+        added_comments = 0
+        empty_count = 0
+        retry_cnt = 0
+
+        while self.scroller.scrolling:
+            try:
+                self.get_comment_cards()
+                added_comments = 0
+
+                for card in self.comment_cards[-15:]:
+                    # print(card)
+                    try:
+                        comment_id = str(card)
+
+                        if comment_id not in self.comment_ids:
+                            self.comment_ids.add(comment_id)
+
+                            if not self.scraper_details["poster_details"]:
+                                self.driver.execute_script(
+                                    "arguments[0].scrollIntoView();", card
+                                )
+
+                            comment = Comment(
+                                card=card,
+                            )
+                            # print("yesssssssssssssssssss",comment)
+
+                            if comment:
+                                if not comment.error and comment.comment is not None:
+                                    if not comment.is_ad:
+                                        self.comment_data.append(comment.comment)
+                                        # print("Nooooooooooooooooooooooooooo", comment.comment)
+                                        added_comments += 1
+                                        self.progress.print_progress(len(self.comment_data), False, 0, no_comments_limit)
+
+                                        if len(self.comment_data) >= self.max_comments and not no_comments_limit:
+                                            self.scroller.scrolling = False
+                                            break
+                                    else:
+                                        continue
+                                else:
+                                    continue
+                            else:
+                                continue
+                        else:
+                            continue
+                    except NoSuchElementException:
+                        continue
+
+                if len(self.comment_data) >= self.max_tweets and not no_comments_limit:
+                    break
+
+                if added_comments == 0:
+                    # Check if there is a button "Retry" and click on it with a regular basis until a certain amount of tries
+                    try:
+                        while retry_cnt < 15:
+                            retry_button = self.driver.find_element(
+                            "xpath", "//span[text()='Retry']/../../..")
+                            self.progress.print_progress(len(self.data), True, retry_cnt, no_comments_limit)
+                            sleep(58)
+                            retry_button.click()
+                            retry_cnt += 1
+                            sleep(2)
+                    # There is no Retry button so the counter is reseted
+                    except NoSuchElementException:
+                        retry_cnt = 0
+                        self.progress.print_progress(len(self.comment_data), False, 0, no_comments_limit)
+
+                    if empty_count >= 5:
+                        if refresh_count >= 3:
+                            print()
+                            print("No more comments to scrape")
+                            break
+                        refresh_count += 1
+                    empty_count += 1
+                    sleep(1)
+                else:
+                    empty_count = 0
+                    refresh_count = 0
+            except StaleElementReferenceException:
+                sleep(2)
+                continue
+            except KeyboardInterrupt:
+                print("\n")
+                print("Keyboard Interrupt")
+                self.interrupted = True
+                break
+            except Exception as e:
+                print("\n")
+                print(f"Error scraping tweets: {e}")
+                break
+        print("")
+
+        if len(self.comment_data) >= self.max_comments or no_comments_limit:
+            print("Scraping Complete")
+        else:
+            print("Scraping Incomplete")
+        self.comments[tweet_id] = self.comment_data
+
+        if not no_comments_limit:
+            print("Comments: {} out of {}\n".format(len(self.comment_data), self.max_comments))
+
+        pass
+    
+    
+
     def save_to_csv(self):
         print("Saving Tweets to CSV...")
         now = datetime.now()
@@ -559,7 +753,7 @@ It may be due to the following:
             # "Emojis": [tweet[11] for tweet in self.data],
             # "Profile Image": [tweet[12] for tweet in self.data],
             # "Tweet Link": [tweet[13] for tweet in self.data],
-            # "Tweet ID": [f"tweet_id:{tweet[14]}" for tweet in self.data],
+            "Tweet ID": [f"tweet_id:{tweet[14]}" for tweet in self.data],
         }
 
         if self.scraper_details["poster_details"]:
@@ -571,6 +765,39 @@ It may be due to the following:
 
         current_time = now.strftime("%Y-%m-%d_%H-%M-%S")
         file_path = f"{folder_path}{current_time}_tweets_1-{len(self.data)}.csv"
+        pd.set_option("display.max_colwidth", None)
+        df.to_csv(file_path, index=False, encoding="utf-8")
+
+        print("CSV Saved: {}".format(file_path))
+
+        pass
+
+    def save_comment_to_csv(self):
+        print("Saving Tweets to CSV...")
+        now = datetime.now()
+        folder_path = "./comments/"
+
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+            print("Created Folder: {}".format(folder_path))
+
+        data = {
+            "Name": [comment[0] for comment in self.comments.values()],
+            "Handle": [comment[1] for comment in self.comments.values()],
+            "Timestamp": [comment[2] for comment in self.comments.values()],
+            "Content": [comment[3] for comment in self.comments.values()],
+            # "Tags": [tweet[9] for tweet in self.data],
+            # "Mentions": [tweet[10] for tweet in self.data],
+            # "Emojis": [tweet[11] for tweet in self.data],
+            # "Profile Image": [tweet[12] for tweet in self.data],
+            # "Tweet Link": [tweet[13] for tweet in self.data],
+            # "Tweet ID": [f"tweet_id:{tweet[14]}" for tweet in self.data],
+        }
+
+        df = pd.DataFrame(data)
+
+        current_time = now.strftime("%Y-%m-%d_%H-%M-%S")
+        file_path = f"{folder_path}{current_time}_comments_1-{len(self.comment_data)}.csv"
         pd.set_option("display.max_colwidth", None)
         df.to_csv(file_path, index=False, encoding="utf-8")
 
